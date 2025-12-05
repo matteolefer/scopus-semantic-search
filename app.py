@@ -2,36 +2,67 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import json
+import networkx as nx
+from pyvis.network import Network
+import streamlit.components.v1 as components
+import tempfile
+import os
+from collections import Counter
+import networkx.algorithms.community as nx_comm # For community detection
+
 # Ensure the analyze_with_gemini function is in utils.py
 from utils import load_data, search_articles, analyze_with_gemini
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Scopus AI Search", page_icon="🧬")
 
-# --- CUSTOM CSS (Optional, for styling) ---
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
     .stExpander { border: 1px solid #e0e0e0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .reportview-container { background: #fdfdfd; }
+    .metric-card { background-color: #f9f9f9; padding: 10px; border-radius: 5px; text-align: center; }
+    h3 { color: #0068c9; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- SIDEBAR & CONFIGURATION ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    st.info("Enter your Google Gemini API key to enable intelligent article analysis.")
+    
     api_key = st.text_input("Gemini API Key", type="password", help="Get a key at aistudio.google.com")
+    
+    if not api_key:
+        st.warning("⚠️ Enter API Key to unlock AI features")
+        st.markdown("[Get Free Key](https://aistudio.google.com/app/apikey)")
+    else:
+        st.success("✅ AI Active")
+        
     st.markdown("---")
     st.markdown("👨‍💻 **Data Science Project**")
     st.markdown("Scopus Corpus Analysis & Semantic Search.")
 
 # --- LOAD DATA ---
-# Using the cache defined in utils.py to avoid reloading on every interaction
 with st.spinner("Loading AI model and data..."):
     df, embeddings, model = load_data()
 
 if df is None:
-    st.stop() # Stop the app if data fails to load
+    st.stop() 
+
+# --- CACHED FUNCTIONS (OPTIMIZATION) ---
+@st.cache_data(show_spinner=False)
+def get_unique_authors(df_input):
+    """
+    Extracts and sorts unique authors from the dataframe.
+    Cached to avoid re-computation on every rerun.
+    """
+    all_authors_flat = [
+        a.strip() 
+        for sublist in df_input['authors'].dropna().astype(str).str.split(',') 
+        for a in sublist
+    ]
+    auth_counts = Counter(all_authors_flat)
+    # Return authors with >2 chars and not 'unknown', sorted by frequency
+    return [a for a, c in auth_counts.most_common() if len(a) > 2 and "unknown" not in a.lower()]
 
 # --- MAIN HEADER ---
 st.title("🧬 Scopus Semantic Search Engine")
@@ -40,7 +71,7 @@ This application uses **Embeddings (SBERT)** and an **LLM (Gemini)** to explore 
 """)
 
 # --- TAB NAVIGATION ---
-tab1, tab2, tab3 = st.tabs(["🔍 AI Search", "📊 Statistics & Trends", "🕸️ Author Network"])
+tab1, tab2, tab3 = st.tabs(["🔍 AI Search", "📊 Dashboard & Analytics", "🕸️ Author Network"])
 
 # =========================================================
 # TAB 1: SEMANTIC SEARCH (AI MODULE)
@@ -50,17 +81,13 @@ with tab1:
     with col1:
         query = st.text_input("Ask your scientific question:", placeholder="Ex: Generative AI for energy efficiency...")
     with col2:
-        # Filter by year
         min_year = int(df['publication_year'].min())
         max_year = int(df['publication_year'].max())
         selected_years = st.slider("Filter by year", min_year, max_year, (min_year, max_year))
 
     if query:
-        # 1. Vector Search (Fast)
-        # Retrieve a few more results (10) to give choices
         results = search_articles(query, model, embeddings, df, top_k=10)
         
-        # Manual filtering by year on the returned results
         filtered_results = [
             res for res in results 
             if selected_years[0] <= res['year'] <= selected_years[1]
@@ -68,115 +95,350 @@ with tab1:
         
         st.markdown(f"### 🎯 Results found: {len(filtered_results)}")
 
-        # --- GEMINI LOGIC ---
         gemini_active = False
         
-        if api_key:
-            # If we have a key, show the magic button
-            if st.button("✨ Analyze relevance with Gemini (AI)", type="primary"):
-                if len(filtered_results) > 0:
-                    with st.spinner("Gemini is reading the articles for you..."):
-                        # Send only the top 5 to avoid saturating the API
-                        top_results_for_ai = filtered_results[:5]
-                        ai_response = analyze_with_gemini(query, top_results_for_ai, api_key)
+        col_btn, col_info = st.columns([1, 4])
+        with col_btn:
+            run_ai = st.button("✨ Analyze with AI", type="primary", disabled=not api_key)
+        
+        if not api_key:
+            st.caption("🔒 *Enter API Key in sidebar to unlock AI Reranking & Summarization*")
+
+        if run_ai and api_key:
+            if len(filtered_results) > 0:
+                with st.spinner("Gemini is reading the articles for you..."):
+                    top_results_for_ai = filtered_results[:5]
+                    ai_response = analyze_with_gemini(query, top_results_for_ai, api_key)
+                    
+                    try:
+                        start_idx = ai_response.find('[')
+                        end_idx = ai_response.rfind(']') + 1
                         
-                        # Clean JSON returned by Gemini
-                        clean_json = ai_response.replace('```json', '').replace('```', '').strip()
-                        
-                        try:
+                        if start_idx != -1 and end_idx != 0:
+                            clean_json = ai_response[start_idx:end_idx]
                             ai_data = json.loads(clean_json)
-                            gemini_active = True # Switch to AI display mode
-                        except json.JSONDecodeError:
-                            st.error("Gemini response formatting error. Standard display.")
-                            st.code(ai_response) # Debug
-                else:
-                    st.warning("No results to analyze in this year range.")
+                            gemini_active = True
+                        else:
+                            st.error("Gemini did not return a valid JSON list.")
+                            st.code(ai_response)
+                            
+                    except json.JSONDecodeError:
+                        st.error("Gemini response formatting error.")
+                        st.code(ai_response)
+            else:
+                st.warning("No results to analyze.")
 
         # --- DISPLAY RESULTS ---
         
         if gemini_active and 'ai_data' in locals():
-            # MODE 1: AI-ENRICHED DISPLAY
-            st.success("AI analysis generated successfully!")
+            st.success("✅ AI Analysis Complete")
             
-            # Loop through analyzed results
             for idx, (res, ai) in enumerate(zip(top_results_for_ai, ai_data)):
-                with st.expander(f"🤖 {ai.get('relevance_score', 0)}% | {res['title']} ({res['year']})", expanded=True):
-                    col_a, col_b = st.columns([3, 1])
+                score = ai.get('relevance_score', 0)
+                
+                if idx == 0 and score > 80:
+                    st.balloons()
+
+                short_title = (res['title'][:75] + '..') if len(res['title']) > 75 else res['title']
+                
+                with st.expander(f"🤖 AI Score: {score}/100 | {short_title}", expanded=(idx < 2)):
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                        st.markdown(f"### {res['title']}")
+                        
+                        doi_link = res['doi']
+                        if doi_link and str(doi_link).lower() != 'nan' and str(doi_link) != '':
+                            if not str(doi_link).startswith('http'):
+                                doi_link = f"https://doi.org/{doi_link}"
+                            st.caption(f"📅 **{res['year']}** | ✍️ {res['authors']} | 🔗 [Open Article]({doi_link})")
+                        else:
+                            st.caption(f"📅 **{res['year']}** | ✍️ {res['authors']}")
+                        
+                        st.markdown("---")
+                        st.markdown("**📝 Summary:**")
+                        st.info(ai.get('summary', 'No summary'))
                     
-                    with col_a:
-                        st.markdown(f"**Summary:** {ai.get('summary', 'No summary')}")
-                        st.markdown(f"**Analysis:** {ai.get('relevance_reason', 'No analysis')}")
-                        st.caption(f"Authors: {res['authors']} | DOI: {res['doi']}")
-                        st.info(f"Abstract excerpt: {res['abstract'][:300]}...")
-                    
-                    with col_b:
-                        score = ai.get('relevance_score', 0)
-                        st.metric("Relevance", f"{score}/100")
+                    with c2:
+                        st.markdown("#### 🔍 Why relevant?")
+                        reason = ai.get('relevance_reason', '')
                         if score > 75:
-                            st.balloons() if idx == 0 else None # Little fun for the top 1
-            
-            if len(filtered_results) > 5:
-                st.markdown("---")
-                st.caption("Other results (Not analyzed by AI):")
-                # Display the rest in standard mode
-                for res in filtered_results[5:]:
-                     with st.expander(f"{res['score']:.2f} | {res['title']} ({res['year']})"):
+                            st.success(f"**High Relevance**\n\n{reason}")
+                        elif score > 50:
+                            st.warning(f"**Partial Relevance**\n\n{reason}")
+                        else:
+                            st.error(f"**Low Relevance**\n\n{reason}")
+                        st.metric("Confidence Score", f"{score}/100")
+                        
+                    st.markdown("---")
+                    with st.expander("Read full abstract"):
                         st.write(res['abstract'])
 
+            if len(filtered_results) > 5:
+                st.markdown("### 📚 Other Results")
+                for res in filtered_results[5:]:
+                     with st.expander(f"📄 {res['score']:.2f} | {res['title']} ({res['year']})"):
+                        st.markdown(f"### {res['title']}")
+                        st.markdown(f"**✍️ Authors:** *{res['authors']}*")
+                        doi_link = res['doi']
+                        if doi_link and str(doi_link).lower() != 'nan' and str(doi_link) != '':
+                             if not str(doi_link).startswith('http'):
+                                doi_link = f"https://doi.org/{doi_link}"
+                             st.markdown(f"🔗 [**Read Full Article**]({doi_link})")
+                        st.markdown("---")
+                        st.markdown(f"{res['abstract'][:300]}...") 
+
         else:
-            # MODE 2: STANDARD DISPLAY (No key or not clicked yet)
-            if not api_key:
-                st.info("💡 Tip: Add a Gemini API key in the sidebar to get automatic summaries.")
-            
             for res in filtered_results:
-                with st.expander(f"📄 Score: {res['score']:.2f} | {res['title']} ({res['year']})"):
-                    st.markdown(f"**Authors:** {res['authors']}")
-                    st.markdown(f"**Affiliation:** {res['affiliation']}")
+                short_title = (res['title'][:80] + '..') if len(res['title']) > 80 else res['title']
+                with st.expander(f"📄 Score: {res['score']:.2f} | {short_title} ({res['year']})"):
+                    st.markdown(f"### {res['title']}")
+                    m1, m2 = st.columns([3, 1])
+                    with m1:
+                        st.markdown(f"**✍️ Authors:** {res['authors']}")
+                        st.caption(f"🏢 {res['affiliation']}")
+                    with m2:
+                        doi_link = res['doi']
+                        if doi_link and str(doi_link).lower() != 'nan' and str(doi_link) != '':
+                            if not str(doi_link).startswith('http'):
+                                doi_link = f"https://doi.org/{doi_link}"
+                            st.success(f"🔗 [**Open Article**]({doi_link})")
+                        else:
+                            st.caption("No link available")
+                    st.markdown("---")
+                    st.markdown("**📖 Abstract:**")
                     st.write(res['abstract'])
-                    if res['doi']:
-                        st.markdown(f"🔗 [Link to article](https://doi.org/{res['doi']})")
 
 # =========================================================
-# TAB 2: VISUALIZATION (VIZ MODULE)
+# TAB 2: VISUALIZATION DASHBOARD (VIZ MODULE)
 # =========================================================
 with tab2:
-    st.header("📊 Exploratory Data Analysis")
+    st.header("📊 Interactive Dashboard")
+    st.markdown("Explore the dataset with interactive charts. Use the filters below to customize the view.")
+
+    # --- 1. FILTERS ---
+    with st.expander("⚙️ **Global Filters**", expanded=True):
+        f_col1, f_col2 = st.columns(2)
+        with f_col1:
+            # Year Range Filter
+            min_y = int(df['publication_year'].min())
+            max_y = int(df['publication_year'].max())
+            year_range = st.slider("Select Year Range", min_y, max_y, (min_y, max_y), key="viz_year_slider")
+        
+        with f_col2:
+            # Category Filter (if available)
+            if 'category' in df.columns:
+                # Split categories because one paper can have multiple "Comp Sci, Engineering"
+                all_cats = df['category'].dropna().astype(str).str.split(', ').explode().unique()
+                
+                # Clean up categories for the filter list (remove Unknown)
+                clean_cats = [c for c in all_cats if c.lower() not in ['unknown', 'nan', '']]
+                selected_cats = st.multiselect("Filter by Subject Area", options=sorted(clean_cats))
+            else:
+                selected_cats = []
+
+    # Apply Filters to DataFrame
+    df_viz = df[(df['publication_year'] >= year_range[0]) & (df['publication_year'] <= year_range[1])].copy()
     
-    col_viz1, col_viz2 = st.columns(2)
+    if selected_cats:
+        pattern = '|'.join(selected_cats)
+        df_viz = df_viz[df_viz['category'].astype(str).str.contains(pattern, na=False)]
+
+    # --- 2. KEY METRICS (KPIs) ---
+    st.markdown("#### 🚀 Key Performance Indicators (KPIs)")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     
-    with col_viz1:
-        # 1. Publications by year chart
-        st.subheader("📈 Temporal Evolution")
-        pub_counts = df['publication_year'].value_counts().sort_index().reset_index()
-        pub_counts.columns = ['Year', 'Number of Articles']
-        fig_line = px.line(pub_counts, x='Year', y='Number of Articles', markers=True, title="Articles per Year")
-        st.plotly_chart(fig_line, use_container_width=True)
+    kpi1.metric("📚 Total Articles", f"{len(df_viz):,}")
+    kpi2.metric("📅 Time Span", f"{year_range[0]} - {year_range[1]}")
     
-    with col_viz2:
-        # 2. Top Affiliations (Bar Chart)
-        st.subheader("🏫 Top Affiliations")
-        # Quick cleanup for display
-        if 'affiliation' in df.columns:
-            top_aff = df['affiliation'].fillna("Unknown").astype(str).value_counts().head(10).reset_index()
-            top_aff.columns = ['Affiliation', 'Count']
-            fig_bar = px.bar(top_aff, x='Count', y='Affiliation', orientation='h', color='Count', title="Most Active Institutions")
-            fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-            st.plotly_chart(fig_bar, use_container_width=True)
+    unique_authors = len(set([a.strip() for sublist in df_viz['authors'].astype(str).str.split(',') for a in sublist]))
+    kpi3.metric("✍️ Active Researchers", f"{unique_authors:,}")
+    
+    unique_affiliations = df_viz['affiliation'].nunique()
+    kpi4.metric("🏫 Institutions", f"{unique_affiliations:,}")
+
+    st.markdown("---")
+
+    # --- 3. VISUALIZATIONS ROW 1 ---
+    row1_1, row1_2 = st.columns(2)
+    
+    with row1_1:
+        st.subheader("📈 Publications Trend")
+        pub_trend = df_viz.groupby('publication_year').size().reset_index(name='Count')
+        fig_trend = px.line(pub_trend, x='publication_year', y='Count', markers=True, 
+                            title="Number of Articles per Year", template="plotly_white")
+        fig_trend.update_xaxes(type='category')
+        st.plotly_chart(fig_trend, use_container_width=True)
+    
+    with row1_2:
+        st.subheader("🧩 Subject Area Distribution")
+        if 'category' in df_viz.columns:
+            cats_series = df_viz['category'].dropna().astype(str).str.split(', ').explode()
+            cats_series = cats_series[~cats_series.str.lower().isin(['unknown', 'nan', ''])]
+            top_cats = cats_series.value_counts().head(10).reset_index()
+            top_cats.columns = ['Subject Area', 'Count']
+            
+            fig_pie = px.pie(top_cats, values='Count', names='Subject Area', hole=0.4,
+                             title="Top 10 Subject Areas", template="plotly_white")
+            st.plotly_chart(fig_pie, use_container_width=True)
         else:
-            st.warning("No affiliation data available.")
+            st.info("No Category data available.")
+
+    # --- 4. VISUALIZATIONS ROW 2 ---
+    row2_1, row2_2 = st.columns(2)
+    
+    with row2_1:
+        st.subheader("🏫 Top 10 Affiliations")
+        if 'affiliation' in df_viz.columns:
+            aff_series = df_viz['affiliation'].fillna("Unknown")
+            top_aff = aff_series.value_counts().head(10).reset_index()
+            top_aff.columns = ['Affiliation', 'Count']
+            
+            fig_bar_aff = px.bar(top_aff, x='Count', y='Affiliation', orientation='h', 
+                                 title="Most Productive Institutions", template="plotly_white", color='Count')
+            fig_bar_aff.update_layout(yaxis={'categoryorder':'total ascending'})
+            st.plotly_chart(fig_bar_aff, use_container_width=True)
+
+    with row2_2:
+        st.subheader("✍️ Top 10 Active Authors")
+        all_authors = [a.strip() for sublist in df_viz['authors'].dropna().astype(str).str.split(',') for a in sublist]
+        all_authors = [a for a in all_authors if a.lower() not in ['unknown', 'unknown author', '']]
+        
+        if all_authors:
+            top_authors_count = Counter(all_authors).most_common(10)
+            df_auth = pd.DataFrame(top_authors_count, columns=['Author', 'Count'])
+            fig_bar_auth = px.bar(df_auth, x='Count', y='Author', orientation='h',
+                                  title="Most Frequent Authors", template="plotly_white", color='Count')
+            fig_bar_auth.update_layout(yaxis={'categoryorder':'total ascending'})
+            st.plotly_chart(fig_bar_auth, use_container_width=True)
+        else:
+            st.info("No Author data available.")
+            
+    # --- 5. VISUALIZATIONS ROW 3 (ADVANCED) ---
+    st.subheader("🌡️ Research Hotspots (Heatmap)")
+    if 'category' in df_viz.columns:
+        df_exploded = df_viz[['publication_year', 'category']].dropna()
+        df_exploded['category'] = df_exploded['category'].astype(str).str.split(', ')
+        df_exploded = df_exploded.explode('category')
+        df_exploded = df_exploded[~df_exploded['category'].str.lower().isin(['unknown', 'nan', ''])]
+        
+        top_15_cats = df_exploded['category'].value_counts().head(15).index
+        df_heatmap = df_exploded[df_exploded['category'].isin(top_15_cats)]
+        
+        heatmap_data = df_heatmap.groupby(['category', 'publication_year']).size().reset_index(name='Count')
+        
+        fig_heat = px.density_heatmap(heatmap_data, x='publication_year', y='category', z='Count',
+                                      title="Intensity of Research by Topic & Year", 
+                                      color_continuous_scale="Viridis", template="plotly_white")
+        fig_heat.update_xaxes(type='category')
+        st.plotly_chart(fig_heat, use_container_width=True)
 
 # =========================================================
-# TAB 3: NETWORK (PLACEHOLDER)
+# TAB 3: NETWORK ANALYSIS (STAR TOPOLOGY - TUNED PHYSICS)
 # =========================================================
 with tab3:
-    st.header("🕸️ Co-author Network")
-    st.info("🚧 This module allows exploring collaborations between researchers.")
-    st.markdown("""
-    **Future implementation idea:**
-    1. Select an author.
-    2. Use `networkx` to find their co-authors in the dataset.
-    3. Visualize the graph with `streamlit-agraph` or `pyvis`.
-    """)
+    st.header("🕸️ Researcher Collaboration Network (Star View)")
+    st.markdown("Visualize the direct collaborators of a researcher. Bubble size represents the number of shared papers.")
+
+    # 1. PREPARE AUTHOR LIST
+    with st.spinner("Preparing author list..."):
+        sorted_authors = get_unique_authors(df)
+
+    # 2. SELECTION UI
+    col_sel, col_net_info = st.columns([1, 2])
+    with col_sel:
+        selected_author = st.selectbox("🔍 Select Researcher", sorted_authors[:3000], index=0, help="Type to search")
+        
+        # Physics Controls for User Tuning
+        st.caption("🔧 Physics Fine-Tuning")
+        node_dist = st.slider("Node Spacing", 100, 600, 300, help="Push bubbles further apart")
+        spring_len = st.slider("Link Length", 50, 400, 150, help="Make connecting lines longer")
+        
+        min_collab = st.slider("Min. Shared Papers", 1, 10, 1, help="Filter out weak links")
+        max_nodes = st.slider("Max Collaborators to Show", 10, 100, 30, help="Limit graph size")
+        physics_toggle = st.checkbox("Enable Physics", value=True)
     
-    # Visual placeholder to show the professor we planned this
-    st.image("https://raw.githubusercontent.com/WestHealth/pyvis/master/docs/images/network_example.png", caption="Example of expected PyVis output", width=600)
+    # 3. BUILD GRAPH LOGIC
+    if selected_author:
+        # Filter papers where this author appears
+        author_papers = df[df['authors'].astype(str).str.contains(selected_author, regex=False, na=False)]
+        
+        # 3.1 IDENTIFY DIRECT COLLABORATORS
+        all_co_authors = []
+        for _, row in author_papers.iterrows():
+            paper_authors = [a.strip() for a in str(row['authors']).split(',')]
+            # Keep valid co-authors
+            valid_authors = [a for a in paper_authors if a != selected_author and len(a) > 2]
+            all_co_authors.extend(valid_authors)
+            
+        # Count frequency (Weight of the branch)
+        co_auth_counts = Counter(all_co_authors)
+        
+        # Filter and Sort
+        filtered_co_authors = {k: v for k, v in co_auth_counts.items() if v >= min_collab}
+        top_co_authors = sorted(filtered_co_authors.items(), key=lambda x: x[1], reverse=True)[:max_nodes]
+        
+        with col_net_info:
+            st.info(f"Researcher **{selected_author}** has **{len(filtered_co_authors)}** collaborators (>= {min_collab} shared papers). Showing top **{len(top_co_authors)}**.")
+        
+        # 3.2 BUILD STAR GRAPH
+        G = nx.Graph()
+        
+        # Add Central Hub
+        G.add_node(selected_author, size=40, title=f"Focus: {selected_author}", color="#E63946", label=selected_author, font={'size': 20, 'color': 'black'})
+        
+        # Add Branches (Spokes)
+        for co_auth, weight in top_co_authors:
+            # Bubble size proportional to collaboration count
+            bubble_size = 15 + (weight * 2) 
+            # Add Node
+            G.add_node(co_auth, size=bubble_size, title=f"{co_auth}: {weight} shared papers", color="#457B9D", label=co_auth)
+            # Add Edge
+            G.add_edge(selected_author, co_auth, weight=weight, title=f"{weight} collaborations")
+
+        # 4. VISUALIZE WITH PYVIS
+        try:
+            # Increased height for better spread
+            net = Network(height="800px", width="100%", bgcolor="#ffffff", font_color="black")
+            net.from_nx(G)
+            
+            if physics_toggle:
+                # Use forceAtlas2Based solver which is excellent for star graphs and preventing overlap
+                # Dynamic injection of user slider values
+                net.set_options(f"""
+                var options = {{
+                  "physics": {{
+                    "forceAtlas2Based": {{
+                      "gravitationalConstant": -100,
+                      "centralGravity": 0.005,
+                      "springLength": {spring_len},
+                      "springConstant": 0.05,
+                      "damping": 0.4,
+                      "avoidOverlap": 1
+                    }},
+                    "minVelocity": 0.75,
+                    "solver": "forceAtlas2Based"
+                  }}
+                }}
+                """)
+            else:
+                net.toggle_physics(False)
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
+                net.save_graph(tmp.name)
+                with open(tmp.name, 'r', encoding='utf-8') as f:
+                    html_string = f.read()
+            
+            components.html(html_string, height=820)
+            os.remove(tmp.name)
+            
+        except Exception as e:
+            st.error(f"Error generating network: {e}")
+        
+        # --- 5. DATA TABLE (FIXED & MATCHING GRAPH) ---
+        with st.expander(f"📊 View Collaboration Details", expanded=True):
+            # Create dataframe directly from our filtered list (100% consistent with graph)
+            if top_co_authors:
+                df_collab = pd.DataFrame(top_co_authors, columns=["Co-Author", "Shared Papers"])
+                st.dataframe(df_collab, use_container_width=True)
+            else:
+                st.info("No collaborators found with current filters.")
