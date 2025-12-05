@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+plotly
+sentence-transformers
+google-generativeai
+pyarrow
+scikit-learn
+networkx

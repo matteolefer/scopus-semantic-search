@@ -1,0 +1,39 @@
+Byte-compiled / optimized / DLL files
+
+pycache/
+*.py[cod]
+*$py.class
+
+Caches
+
+.ipynb_checkpoints
+.DS_Store
+
+Virtual Environments
+
+venv/
+env/
+.env
+
+Raw Data & Archives (CRITICAL: exclude huge files)
+
+Correction de la syntaxe : les backslashes inutiles sont supprimés.
+
+*.csv
+*.json
+*.tar.gz
+*.zip
+
+Dossier de données brutes volumineuses
+
+ScopusData2018-2023/
+data/scopus_export.csv
+
+Temporary output folders
+
+output/temp_embeddings/
+
+Keep the processed data (if < 100MB) so the app works out-of-the-box
+
+!output/articles_metadata.parquet
+!output/articles_embeddings.npy
