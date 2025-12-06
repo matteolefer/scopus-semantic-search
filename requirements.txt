@@ -7,3 +7,4 @@ google-generativeai
 pyarrow
 scikit-learn
 networkx
+pyvis
