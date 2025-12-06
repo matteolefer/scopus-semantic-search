@@ -74,7 +74,7 @@ This application uses **Embeddings (SBERT)** and an **LLM (Gemini)** to explore 
 tab1, tab2, tab3 = st.tabs(["🔍 AI Search", "📊 Dashboard & Analytics", "🕸️ Author Network"])
 
 # =========================================================
-# TAB 1: SEMANTIC SEARCH (AI MODULE)
+# TAB 1: SEMANTIC SEARCH (AI MODULE) 
 # =========================================================
 with tab1:
     col1, col2 = st.columns([3, 1])
@@ -95,20 +95,40 @@ with tab1:
         
         st.markdown(f"### 🎯 Results found: {len(filtered_results)}")
 
-        gemini_active = False
-        
+        # Track AI analysis state
+        if "gemini_active" not in st.session_state:
+            st.session_state.gemini_active = False
+        if "ai_data" not in st.session_state:
+            st.session_state.ai_data = None
+        if "top_results_for_ai" not in st.session_state:
+            st.session_state.top_results_for_ai = None
+
         col_btn, col_info = st.columns([1, 4])
         with col_btn:
-            run_ai = st.button("✨ Analyze with AI", type="primary", disabled=not api_key)
-        
+            if not st.session_state.gemini_active:
+                run_ai = st.button("✨ Analyze with AI", type="primary", disabled=not api_key)
+                remove_ai = False
+            else:
+                remove_ai = st.button("❌ Remove AI Analysis", type="secondary")
+                run_ai = False
+
         if not api_key:
             st.caption("🔒 *Enter API Key in sidebar to unlock AI Reranking & Summarization*")
 
+        # --- Remove AI Analysis ---
+        if remove_ai:
+            st.session_state.gemini_active = False
+            st.session_state.ai_data = None
+            st.session_state.top_results_for_ai = None
+            st.success("AI analysis removed.")
+            st.rerun()  # refresh UI immediately
+
+        # --- Run AI Analysis ---
         if run_ai and api_key:
             if len(filtered_results) > 0:
                 with st.spinner("Gemini is reading the articles for you..."):
-                    top_results_for_ai = filtered_results[:5]
-                    ai_response = analyze_with_gemini(query, top_results_for_ai, api_key)
+                    top_results = filtered_results[:5]
+                    ai_response = analyze_with_gemini(query, top_results, api_key)
                     
                     try:
                         start_idx = ai_response.find('[')
@@ -116,8 +136,10 @@ with tab1:
                         
                         if start_idx != -1 and end_idx != 0:
                             clean_json = ai_response[start_idx:end_idx]
-                            ai_data = json.loads(clean_json)
-                            gemini_active = True
+                            st.session_state.ai_data = json.loads(clean_json)
+                            st.session_state.top_results_for_ai = top_results
+                            st.session_state.gemini_active = True
+                            st.rerun()  # Force button update immediately
                         else:
                             st.error("Gemini did not return a valid JSON list.")
                             st.code(ai_response)
@@ -129,11 +151,10 @@ with tab1:
                 st.warning("No results to analyze.")
 
         # --- DISPLAY RESULTS ---
-        
-        if gemini_active and 'ai_data' in locals():
+        if st.session_state.gemini_active and st.session_state.ai_data:
             st.success("✅ AI Analysis Complete")
             
-            for idx, (res, ai) in enumerate(zip(top_results_for_ai, ai_data)):
+            for idx, (res, ai) in enumerate(zip(st.session_state.top_results_for_ai, st.session_state.ai_data)):
                 score = ai.get('relevance_score', 0)
                 
                 if idx == 0 and score > 80:
