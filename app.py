@@ -80,6 +80,15 @@ with tab1:
     col1, col2 = st.columns([3, 1])
     with col1:
         query = st.text_input("Ask your scientific question:", placeholder="Ex: Generative AI for energy efficiency...")
+        # --- Reset AI state if the query changes ---
+        if "last_query" not in st.session_state:
+            st.session_state.last_query = ""
+
+        if query != st.session_state.last_query:
+            st.session_state.gemini_active = False
+            st.session_state.ai_data = None
+            st.session_state.top_results_for_ai = None
+            st.session_state.last_query = query
     with col2:
         min_year = int(df['publication_year'].min())
         max_year = int(df['publication_year'].max())
