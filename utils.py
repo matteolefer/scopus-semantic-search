@@ -4,6 +4,7 @@ from sentence_transformers import SentenceTransformer
 import streamlit as st
 import google.generativeai as genai
 import os
+import re
 
 # Chemins des fichiers (relatifs)
 METADATA_PATH = 'output/articles_metadata.parquet'
@@ -95,3 +96,28 @@ def analyze_with_gemini(query, articles, api_key):
         
     except Exception as e:
         return f"Erreur Gemini : {str(e)}"
+    
+
+def validate_gemini_api_key(api_key):
+    import google.generativeai as genai
+    try:
+        genai.configure(api_key=api_key)
+
+        # Gemini 2.5 Flash quick test
+        test_model = genai.GenerativeModel("gemini-2.5-flash")
+        test_model.generate_content("ping") 
+
+        return True
+
+    except Exception as e:
+        print("Validation error:", e)
+        return False
+
+
+
+
+
+
+
+
+

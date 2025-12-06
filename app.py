@@ -11,7 +11,7 @@ from collections import Counter
 import networkx.algorithms.community as nx_comm # For community detection
 
 # Ensure the analyze_with_gemini function is in utils.py
-from utils import load_data, search_articles, analyze_with_gemini
+from utils import load_data, search_articles, analyze_with_gemini, validate_gemini_api_key
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Scopus AI Search", page_icon="🧬")
@@ -25,17 +25,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def on_key_change():
+    st.session_state.ready_to_validate = True
+
 # --- SIDEBAR & CONFIGURATION ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    
-    api_key = st.text_input("Gemini API Key", type="password", help="Get a key at aistudio.google.com")
+
+    st.text_input(
+        "Gemini API Key",
+        type="password",
+        help="Get a key at aistudio.google.com",
+        key="api_key",
+        on_change=on_key_change,   # validate only after typing stops
+    )
+
+    api_key = st.session_state.get("api_key", "")
     
     if not api_key:
-        st.warning("⚠️ Enter API Key to unlock AI features")
-        st.markdown("[Get Free Key](https://aistudio.google.com/app/apikey)")
+        st.warning("⚠️ Enter your API Key to unlock AI features.")
+        st.markdown("[🔑 Get Free API Key](https://aistudio.google.com/app/apikey)")
+        st.session_state.api_valid = False
+
     else:
-        st.success("✅ AI Active")
+        if st.session_state.get("ready_to_validate", False):
+            st.session_state.api_valid = validate_gemini_api_key(api_key)
+            st.session_state.ready_to_validate = False   # reset
+
+        if st.session_state.get("api_valid", False):
+            st.success("✅ Valid API Key — AI Features Enabled")
+        else:
+            st.error("❌ Invalid API Key. Please enter a correct one.")
         
     st.markdown("---")
     st.markdown("👨‍💻 **Data Science Project**")
@@ -115,7 +135,7 @@ with tab1:
         col_btn, col_info = st.columns([1, 4])
         with col_btn:
             if not st.session_state.gemini_active:
-                run_ai = st.button("✨ Analyze with AI", type="primary", disabled=not api_key)
+                run_ai = st.button("✨ Analyze with AI", type="primary", disabled=not st.session_state.api_valid)
                 remove_ai = False
                 sort_option = "Similarity Score"  # default when AI not run
             else:
