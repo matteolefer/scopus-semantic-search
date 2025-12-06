@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import matplotlib.pyplot as plt
 import json
 import networkx as nx
 from pyvis.network import Network
@@ -406,10 +407,9 @@ with tab2:
 # =========================================================
 # TAB 3: NETWORK ANALYSIS (STATIC STAR GRAPH - NETWORKX)
 # =========================================================
-import matplotlib.pyplot as plt
 with tab3:
     st.header("🕸️ Researcher Collaboration Network (Star View)")
-    st.markdown("Visualize the direct collaborators of a researcher. Bubble size represents the number of shared papers.")
+    st.markdown("Visualize the direct collaborators of a researcher. Each node represents an author, and edges represent co-authorship links.")
 
     # 1. PREPARE AUTHOR LIST
     with st.spinner("Preparing author list..."):
@@ -470,24 +470,65 @@ with tab3:
         # ---- 4. STATIC VISUALIZATION ----
         st.subheader("📌 Collaboration Graph")
 
-        plt.figure(figsize=(8, 8))
+        # Better-looking static visualization (no background)
+        plt.figure(figsize=(10, 10), facecolor="none")
 
-        # Layout with fixed seed → stable, no movement
-        pos = nx.spring_layout(G, seed=42, k=0.8)
+        # Improved spacing between nodes
+        pos = nx.spring_layout(G, seed=42, k=1.3)
 
-        # Node sizes: central larger
-        node_sizes = []
+        # Node styling
+        node_colors = []
         for node in G.nodes():
             if node == selected_author:
-                node_sizes.append(1500)
+                node_colors.append("#ff6b6b")   # Highlight main author
             else:
-                node_sizes.append(300)
+                node_colors.append("#4a90e2")   # Blue for collaborators
 
-        nx.draw_networkx_nodes(G, pos, node_size=node_sizes, node_color="#4a90e2")
-        nx.draw_networkx_edges(G, pos, width=1.6)
-        nx.draw_networkx_labels(G, pos, font_size=10, font_color="white")
+        # Increase node sizes for readability
+        node_sizes_improved = []
+        for node in G.nodes():
+            if node == selected_author:
+                node_sizes_improved.append(2500)   
+            else:
+                node_sizes_improved.append(900)
+
+        # Remove axes background
+        ax = plt.gca()
+        ax.set_facecolor("none")
+
+        # Draw nodes & edges
+        nx.draw_networkx_nodes(
+            G, pos,
+            node_size=node_sizes_improved,
+            node_color=node_colors,
+            edgecolors="black",
+            linewidths=1.2
+        )
+
+        nx.draw_networkx_edges(
+            G, pos,
+            width=1.4,
+            alpha=0.5,
+            edge_color="gray"
+        )
+
+        # Label styling (white pill behind text)
+        nx.draw_networkx_labels(
+            G, pos,
+            font_size=8,
+            font_color="black",
+            font_weight="bold",
+            bbox=dict(
+                facecolor="white",
+                edgecolor="none",
+                boxstyle="round,pad=0.2",
+                alpha=0.7
+            )
+        )
 
         plt.axis("off")
+        plt.tight_layout()
+
         st.pyplot(plt)
 
         # --- 5. DATA TABLE ---
