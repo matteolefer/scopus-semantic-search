@@ -404,8 +404,9 @@ with tab2:
         st.plotly_chart(fig_heat, use_container_width=True)
 
 # =========================================================
-# TAB 3: NETWORK ANALYSIS (STAR TOPOLOGY - TUNED PHYSICS)
+# TAB 3: NETWORK ANALYSIS (STATIC STAR GRAPH - NETWORKX)
 # =========================================================
+import matplotlib.pyplot as plt
 with tab3:
     st.header("🕸️ Researcher Collaboration Network (Star View)")
     st.markdown("Visualize the direct collaborators of a researcher. Bubble size represents the number of shared papers.")
@@ -417,97 +418,80 @@ with tab3:
     # 2. SELECTION UI
     col_sel, col_net_info = st.columns([1, 2])
     with col_sel:
-        selected_author = st.selectbox("🔍 Select Researcher", sorted_authors[:3000], index=0, help="Type to search")
-        
-        # Physics Controls for User Tuning
-        st.caption("🔧 Physics Fine-Tuning")
-        node_dist = st.slider("Node Spacing", 100, 600, 300, help="Push bubbles further apart")
-        spring_len = st.slider("Link Length", 50, 400, 150, help="Make connecting lines longer")
-        
-        min_collab = st.slider("Min. Shared Papers", 1, 10, 1, help="Filter out weak links")
-        max_nodes = st.slider("Max Collaborators to Show", 10, 100, 30, help="Limit graph size")
-        physics_toggle = st.checkbox("Enable Physics", value=True)
-    
+
+        selected_author = st.selectbox(
+            "🔍 Select Researcher",
+            sorted_authors[:3000],
+            index=0,
+            help="Type to search"
+        )
+
+        st.caption("🔧 Display Controls")
+
+        min_collab = st.slider("Min. Shared Papers", 1, 10, 1)
+        max_nodes = st.slider("Max Collaborators to Show", 10, 100, 30)
+
     # 3. BUILD GRAPH LOGIC
     if selected_author:
-        # Filter papers where this author appears
-        author_papers = df[df['authors'].astype(str).str.contains(selected_author, regex=False, na=False)]
-        
-        # 3.1 IDENTIFY DIRECT COLLABORATORS
+
+        # Filter rows containing this author
+        author_papers = df[df["authors"].astype(str).str.contains(selected_author, regex=False, na=False)]
+
+        # Extract all co-authors
         all_co_authors = []
         for _, row in author_papers.iterrows():
-            paper_authors = [a.strip() for a in str(row['authors']).split(',')]
-            # Keep valid co-authors
+            paper_authors = [a.strip() for a in str(row["authors"]).split(",")]
             valid_authors = [a for a in paper_authors if a != selected_author and len(a) > 2]
             all_co_authors.extend(valid_authors)
-            
-        # Count frequency (Weight of the branch)
+
+        # Count collaborations
         co_auth_counts = Counter(all_co_authors)
-        
-        # Filter and Sort
+
         filtered_co_authors = {k: v for k, v in co_auth_counts.items() if v >= min_collab}
         top_co_authors = sorted(filtered_co_authors.items(), key=lambda x: x[1], reverse=True)[:max_nodes]
-        
+
         with col_net_info:
-            st.info(f"Researcher **{selected_author}** has **{len(filtered_co_authors)}** collaborators (>= {min_collab} shared papers). Showing top **{len(top_co_authors)}**.")
-        
-        # 3.2 BUILD STAR GRAPH
+            st.info(
+                f"Researcher **{selected_author}** has **{len(filtered_co_authors)}** collaborators "
+                f"(≥ {min_collab} shared papers). Showing top **{len(top_co_authors)}**."
+            )
+
+        # --- 3.2 BUILD STATIC GRAPH (NETWORKX) ---
         G = nx.Graph()
-        
-        # Add Central Hub
-        G.add_node(selected_author, size=40, title=f"Focus: {selected_author}", color="#E63946", label=selected_author, font={'size': 20, 'color': 'black'})
-        
-        # Add Branches (Spokes)
+
+        # Add central author
+        G.add_node(selected_author)
+
+        # Add collaborators
         for co_auth, weight in top_co_authors:
-            # Bubble size proportional to collaboration count
-            bubble_size = 15 + (weight * 2) 
-            # Add Node
-            G.add_node(co_auth, size=bubble_size, title=f"{co_auth}: {weight} shared papers", color="#457B9D", label=co_auth)
-            # Add Edge
-            G.add_edge(selected_author, co_auth, weight=weight, title=f"{weight} collaborations")
+            G.add_node(co_auth)
+            G.add_edge(selected_author, co_auth, weight=weight)
 
-        # 4. VISUALIZE WITH PYVIS
-        try:
-            # Increased height for better spread
-            net = Network(height="800px", width="100%", bgcolor="#ffffff", font_color="black")
-            net.from_nx(G)
-            
-            if physics_toggle:
-                # Use forceAtlas2Based solver which is excellent for star graphs and preventing overlap
-                # Dynamic injection of user slider values
-                net.set_options(f"""
-                var options = {{
-                  "physics": {{
-                    "forceAtlas2Based": {{
-                      "gravitationalConstant": -100,
-                      "centralGravity": 0.005,
-                      "springLength": {spring_len},
-                      "springConstant": 0.05,
-                      "damping": 0.4,
-                      "avoidOverlap": 1
-                    }},
-                    "minVelocity": 0.75,
-                    "solver": "forceAtlas2Based"
-                  }}
-                }}
-                """)
+        # ---- 4. STATIC VISUALIZATION ----
+        st.subheader("📌 Collaboration Graph")
+
+        plt.figure(figsize=(8, 8))
+
+        # Layout with fixed seed → stable, no movement
+        pos = nx.spring_layout(G, seed=42, k=0.8)
+
+        # Node sizes: central larger
+        node_sizes = []
+        for node in G.nodes():
+            if node == selected_author:
+                node_sizes.append(1500)
             else:
-                net.toggle_physics(False)
+                node_sizes.append(300)
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-                net.save_graph(tmp.name)
-                with open(tmp.name, 'r', encoding='utf-8') as f:
-                    html_string = f.read()
-            
-            components.html(html_string, height=820)
-            os.remove(tmp.name)
-            
-        except Exception as e:
-            st.error(f"Error generating network: {e}")
-        
-        # --- 5. DATA TABLE (FIXED & MATCHING GRAPH) ---
-        with st.expander(f"📊 View Collaboration Details", expanded=True):
-            # Create dataframe directly from our filtered list (100% consistent with graph)
+        nx.draw_networkx_nodes(G, pos, node_size=node_sizes, node_color="#4a90e2")
+        nx.draw_networkx_edges(G, pos, width=1.6)
+        nx.draw_networkx_labels(G, pos, font_size=10, font_color="white")
+
+        plt.axis("off")
+        st.pyplot(plt)
+
+        # --- 5. DATA TABLE ---
+        with st.expander("📊 View Collaboration Details", expanded=True):
             if top_co_authors:
                 df_collab = pd.DataFrame(top_co_authors, columns=["Co-Author", "Shared Papers"])
                 st.dataframe(df_collab, use_container_width=True)
