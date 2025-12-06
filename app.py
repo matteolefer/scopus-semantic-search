@@ -108,6 +108,7 @@ with tab1:
             if not st.session_state.gemini_active:
                 run_ai = st.button("✨ Analyze with AI", type="primary", disabled=not api_key)
                 remove_ai = False
+                sort_option = "Similarity Score"  # default when AI not run
             else:
                 remove_ai = st.button("❌ Remove AI Analysis", type="secondary")
                 run_ai = False
@@ -121,7 +122,7 @@ with tab1:
             st.session_state.ai_data = None
             st.session_state.top_results_for_ai = None
             st.success("AI analysis removed.")
-            st.rerun()  # refresh UI immediately
+            st.rerun()  
 
         # --- Run AI Analysis ---
         if run_ai and api_key:
@@ -139,7 +140,7 @@ with tab1:
                             st.session_state.ai_data = json.loads(clean_json)
                             st.session_state.top_results_for_ai = top_results
                             st.session_state.gemini_active = True
-                            st.rerun()  # Force button update immediately
+                            st.rerun()  
                         else:
                             st.error("Gemini did not return a valid JSON list.")
                             st.code(ai_response)
@@ -153,8 +154,26 @@ with tab1:
         # --- DISPLAY RESULTS ---
         if st.session_state.gemini_active and st.session_state.ai_data:
             st.success("✅ AI Analysis Complete")
-            
-            for idx, (res, ai) in enumerate(zip(st.session_state.top_results_for_ai, st.session_state.ai_data)):
+
+            sort_option = st.radio(
+                "Sort results by:", 
+                ["AI Score", "Similarity Score"],
+                index=0,
+                horizontal=True
+            )
+
+            # Make sure top_results_for_ai is saved in session for re-use
+            if "top_results_for_ai" not in st.session_state:
+                st.session_state.top_results_for_ai = filtered_results[:5]
+
+            combined = list(zip(st.session_state.top_results_for_ai, st.session_state.ai_data))
+
+            # SORT based on dropdown
+            if sort_option == "AI Score":
+                combined.sort(key=lambda x: x[1].get('relevance_score', 0), reverse=True)
+            # else: keep original order (Similarity Score)
+
+            for idx, (res, ai) in enumerate(combined):
                 score = ai.get('relevance_score', 0)
                 
                 if idx == 0 and score > 80:
@@ -209,6 +228,8 @@ with tab1:
                         st.markdown(f"{res['abstract'][:300]}...") 
 
         else:
+            if sort_option == "Similarity Score":
+                filtered_results.sort(key=lambda x: x['score'], reverse=True)
             for res in filtered_results:
                 short_title = (res['title'][:80] + '..') if len(res['title']) > 80 else res['title']
                 with st.expander(f"📄 Score: {res['score']:.2f} | {short_title} ({res['year']})"):
