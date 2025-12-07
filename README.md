@@ -129,4 +129,8 @@ To enable the AI Reranking and Summarization features:
 
 - **Course**: 2190513 Data Science (DS-ICE)  
 - **Semester**: 2025/1  
-- **Project**: Scopus Dataset Analysis & Search Engine  
+- **Project**: Scopus Dataset Analysis & Search Engine
+
+## 🎥 Presentation Video
+
+Watch the project presentation here: [YouTube Video](https://youtu.be/scgicMhWqTI)
