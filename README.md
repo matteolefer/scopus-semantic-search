@@ -133,4 +133,4 @@ To enable the AI Reranking and Summarization features:
 
 ## 🎥 Presentation Video
 
-Watch the project presentation here: [YouTube Video](https://youtu.be/scgicMhWqTI)
+Watch the project presentation here: [YouTube Video](https://youtu.be/m0FV38ESX6A)
